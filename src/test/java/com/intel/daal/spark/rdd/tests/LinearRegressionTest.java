@@ -30,6 +30,7 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.mllib.linalg.DenseVector;
 import org.apache.spark.mllib.linalg.Vector;
 
@@ -62,6 +63,7 @@ public class LinearRegressionTest {
 		String testLabelFile = args[3];
 
 		SparkConf conf = new SparkConf().setAppName("Test: DAAL LinearRegression on Spark");
+		//conf.setMaster("local[*]");
 		JavaSparkContext sc = new JavaSparkContext(conf);
 		DaalContext dc = new DaalContext();
 		
@@ -79,7 +81,7 @@ public class LinearRegressionTest {
 					}
 				});
 
-		DistributedNumericTable distNT = DistributedNumericTable.fromJavaVectorRDD(vecrdd, 0);
+		DistributedNumericTable trainInputDistNT = DistributedNumericTable.fromJavaVectorRDD(vecrdd, 0);
 
 		// Load test data 
 		FileDataSource testsource = new FileDataSource(dc, testDataFile,
@@ -95,11 +97,37 @@ public class LinearRegressionTest {
 		depsource.loadDataBlock();
 		HomogenNumericTable testLabels = (HomogenNumericTable) depsource.getNumericTable();
 
-		// Training 
-		JavaPairRDD<NumericTable, NumericTable> dataWithLabels = 
-				DistributedNumericTable.split(distNT, Integer.parseInt(pos));
+		// Prepare data for training.
+		JavaPairRDD<NumericTable, NumericTable> dataWithLabelsSwapped =
+				DistributedNumericTable.split(trainInputDistNT, Integer.parseInt(pos));
+
+		// Swap to place table with responses into second position, as expected by LR.train
+		JavaPairRDD<NumericTable, NumericTable> dataWithLabels = dataWithLabelsSwapped.mapToPair(
+				new PairFunction<Tuple2<NumericTable,NumericTable>, NumericTable, NumericTable>() {
+					public Tuple2<NumericTable, NumericTable> call(Tuple2<NumericTable, NumericTable> v1) throws Exception {
+						return new Tuple2<NumericTable, NumericTable>(v1._2, v1._1);
+					}
+				}
+		);
+
+		long startTime = System.currentTimeMillis();
+		// cache transformed data to time training separately
+		dataWithLabels.cache().count();
+
+		long endTime = System.currentTimeMillis();
+		System.out.println("Transformation to NumericTables is finished. It took " + (endTime - startTime) + " ms");
+
+		// configure training with intermediate data type representation + method
 		LinearRegression.trainingConfigure(Double.class, LinearRegression.Method.NORMEQ);
+
+		startTime = System.currentTimeMillis();
+
 		Model LRmodel = LinearRegression.train(sc, dc, dataWithLabels);
+
+		endTime = System.currentTimeMillis();
+
+		System.out.println(String.format("Training time = %d ms\n", endTime - startTime));
+
 		TestUtils.printHomogenNumericTable("DAAL Betas: ", (HomogenNumericTable) LRmodel.getBeta(), 100);
 		
 		// Prediction 

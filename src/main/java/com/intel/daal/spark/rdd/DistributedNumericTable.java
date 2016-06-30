@@ -146,15 +146,25 @@ public class DistributedNumericTable implements java.io.Serializable {
 						}
 						long begin = 0; 
 						long end = nt.numOfCols();
-						double[] first = new double[0];
-						double[] second = new double[0];
+
+						int firstNumCols = position;
+						int secondNumCols = (int)nt.numOfCols() - position;
+
+						double[] first = new double[(int)nt.numOfRows() * firstNumCols];
+						double[] second = new double[(int)nt.numOfRows() * secondNumCols];
+
+						int firstBegin = 0;
+						int secondBegin = 0;
 						
 						while (begin < data.length) {
 							double[] row = ArrayUtils.subarray(data, (int)begin, (int)end);
-							first = ArrayUtils.addAll(
-									first, ArrayUtils.subarray(row, 0, position));
-							second = ArrayUtils.addAll(
-									second, ArrayUtils.subarray(row, position, (int)nt.numOfCols()));
+
+							System.arraycopy(row, 0, first, firstBegin, position);
+							firstBegin += position;
+
+							System.arraycopy(row, position, second, secondBegin, secondNumCols);
+							secondBegin += secondNumCols;
+
 							begin = end;
 							end += nt.numOfCols();
 						}
@@ -196,17 +206,21 @@ public class DistributedNumericTable implements java.io.Serializable {
 						ArrayList<NumericTableWithIndex> tables = new ArrayList<NumericTableWithIndex>();
 						int cursize = 0;
 						int nrows = 0;
-						double[] data = new double[0];
+						ArrayList<Double> data = new ArrayList<>();
 						while (it.hasNext()) {
 							Tuple2<Vector, Long> tup = it.next();
+
 							double[] row = tup._1().toArray();
-							data = ArrayUtils.addAll(data, row);
+							for (double r : row) {
+								data.add(r);
+							}
+
 							cursize += row.length;
 							nrows++;
 							if (nrows == maxRowsPerTable || !it.hasNext()) {
 								NumericTableWithIndex part = new NumericTableWithIndex(
 										tup._2() - nrows + 1,
-										new HomogenNumericTable(context, data, cursize/nrows, nrows));
+										new HomogenNumericTable(context, data.stream().mapToDouble(i -> i).toArray(), cursize/nrows, nrows));
 								tables.add(part);
 								cursize = 0;
 								nrows = 0;
